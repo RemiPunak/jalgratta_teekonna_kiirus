@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="et">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Jalgratta teekonna prognoosija</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #f8fafc; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; z-index: 0; }
+        
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .custom-marker {
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 50%; color: white; font-weight: bold; font-size: 14px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border: 2px solid white;
+        }
+
+        /* Sujuv paneeli üleminek mobiilis */
+        @media (max-width: 767px) {
+            #controlPanel {
+                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                transform: translateY(0); /* Alustab avatuna */
+            }
+        }
+    </style>
+</head>
+<body class="text-slate-900 font-sans antialiased">
+
+    <!-- Kaart -->
+    <div id="map"></div>
+
+    <!-- Mobiilisõbralik kasutajaliidese paneel (Bottom sheet / Sidebar) -->
+    <div id="controlPanel" class="fixed z-10 bottom-0 left-0 w-full md:w-96 md:top-4 md:bottom-auto md:left-4 flex flex-col max-h-[85vh] md:max-h-[calc(100vh-2rem)] bg-white rounded-t-3xl md:rounded-2xl shadow-2xl">
+        
+        <!-- Lohistamise käepide mobiilile (klikitav ala paneeli kokkuklappimiseks) -->
+        <button id="dragHandleBtn" class="w-full flex flex-col items-center pt-3 pb-2 md:hidden focus:outline-none" aria-label="Klapenda paneel">
+            <div class="w-12 h-1.5 bg-slate-200 rounded-full mb-1"></div>
+        </button>
+
+        <!-- Paneeli sisu -->
+        <div class="px-4 pb-4 md:p-6 overflow-y-auto hide-scrollbar flex-1 flex flex-col">
+            
+            <!-- Päis koos mini-kokkuvõtte ja juhtnuppudega -->
+            <div class="flex items-center justify-between mb-4 shrink-0">
+                <div class="flex items-center gap-2">
+                    <div class="p-1.5 bg-emerald-500 rounded-lg text-white">
+                        <i data-lucide="bike" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-base md:text-lg font-bold leading-tight">Rattatee</h1>
+                    </div>
+                </div>
+
+                <!-- Päises kuvatav kokkuvõte, mis paistab ka siis, kui paneel on suletud -->
+                <div id="miniSummary" class="hidden flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-1.5 rounded-full">
+                    <span id="miniDistance">-</span>
+                    <span class="text-emerald-300">|</span>
+                    <span id="miniTime">-</span>
+                </div>
+
+                <div class="flex items-center gap-1">
+                    <button id="locateMeBtn" class="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-full transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center" title="Minu asukoht">
+                        <i data-lucide="navigation" class="w-5 h-5"></i>
+                    </button>
+                    <!-- Nooleklahv paneeli kokkuklappimiseks mobiilis -->
+                    <button id="toggleExpandBtn" class="p-2 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-full transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center md:hidden" title="Peida/Näita seadeid">
+                        <i id="expandChevron" data-lucide="chevron-down" class="w-5 h-5 transition-transform duration-300"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Kokkuvolditav sisuosa -->
+            <div id="panelCollapsibleContent" class="space-y-4 flex-1">
+                <!-- Punktide nimekiri (algus, vahepunktid, lõpp) -->
+                <div id="pointsList" class="space-y-2.5 relative">
+                    <!-- Sisendväljad genereeritakse JS-i abil -->
+                </div>
+
+                <!-- Vahepunkti lisamise nupp -->
+                <button id="addWaypointBtn" class="w-full py-2.5 border-2 border-dashed border-slate-200 hover:border-slate-300 text-slate-500 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors min-h-[44px]">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                    Lisa vahepunkt
+                </button>
+
+                <!-- Kiiruse määramine koos suurte nuppudega -->
+                <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-100">
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="text-sm font-medium text-slate-700">Sõidukiirus</label>
+                        <span id="speedLabel" class="text-emerald-600 font-bold text-base">22 km/h</span>
+                    </div>
+                    
+                    <div class="flex items-center gap-3">
+                        <!-- Vähendamise nupp (44x44px puuteala) -->
+                        <button id="btnDecSpeed" type="button" class="w-11 h-11 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-600 hover:bg-slate-100 active:scale-95 transition-all shrink-0 shadow-sm min-h-[44px] min-w-[44px]">
+                            <i data-lucide="minus" class="w-5 h-5"></i>
+                        </button>
+                        
+                        <!-- Liugur -->
+                        <input type="range" id="speedSlider" min="5" max="40" value="22" class="flex-1 accent-emerald-500 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer py-2">
+                        
+                        <!-- Suurendamise nupp (44x44px puuteala) -->
+                        <button id="btnIncSpeed" type="button" class="w-11 h-11 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-600 hover:bg-slate-100 active:scale-95 transition-all shrink-0 shadow-sm min-h-[44px] min-w-[44px]">
+                            <i data-lucide="plus" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="flex justify-between text-[10px] text-slate-400 mt-1.5 px-1">
+                        <span>5 km/h</span>
+                        <span>40 km/h</span>
+                    </div>
+                </div>
+
+                <!-- Tulemused (distants ja aeg rattaga) -->
+                <div id="resultsPanel" class="hidden space-y-3 border-t border-slate-100 pt-3">
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <span class="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Distants</span>
+                            <span id="resDistance" class="text-base md:text-lg font-bold text-slate-800">-</span>
+                        </div>
+                        <div class="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                            <span class="text-[10px] uppercase font-bold text-emerald-600 block mb-0.5">Aeg rattaga</span>
+                            <span id="resTime" class="text-base md:text-lg font-bold text-emerald-800">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="clearBtn" class="w-full py-2.5 text-slate-500 hover:bg-slate-100 rounded-xl text-sm font-medium transition-colors min-h-[44px]">
+                    Puhasta kaart
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Laadimise indikaator -->
+    <div id="loader" class="fixed top-4 left-1/2 -translate-x-1/2 bg-white px-4 py-2 rounded-full shadow-lg border border-slate-100 items-center gap-2 z-[1000] hidden">
+        <div class="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+        <span class="text-xs font-medium text-slate-600">Arvutan...</span>
+    </div>
+
+    <!-- Veateade -->
+    <div id="errorToast" class="fixed top-4 left-1/2 -translate-x-1/2 bg-rose-50 border border-rose-200 px-4 py-2 rounded-full shadow-lg z-[1000] hidden items-center gap-2 transition-opacity">
+        <i data-lucide="alert-circle" class="w-4 h-4 text-rose-500"></i>
+        <span id="errorMsg" class="text-xs font-medium text-rose-700"></span>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script>
+        // --- OLEK JA ANDMED ---
+        let map;
+        let routeLine;
+        let routeData = { distance: 0, duration: 0 };
+        let markersOnMap = {};
+        let searchTimeout;
+        let isPanelExpanded = true; // Paneeli vaikimisi olek mobiilis
+
+        // Punktide massiiv (algpunkt, vahepunktid, sihtpunkt)
+        let points = [
+            { id: generateId(), type: 'start', address: '', latlng: null },
+            { id: generateId(), type: 'end', address: '', latlng: null }
+        ];
+
+        // Vaikimisi koordinaadid (58°23'26.2"N 26°44'55.7"E)
+        const DEFAULT_LAT = 58.390611;
+        const DEFAULT_LNG = 26.748806;
+        const DEFAULT_ADDRESS = 'Erminurme tee 22, Tartu';
+
+        // --- ALGSEADISTUS ---
+        window.onload = () => {
+            lucide.createIcons();
+            
+            // Kaart (Sihitakse täpselt uude vaikimisi asukohta)
+            map = L.map('map', { zoomControl: false }).setView([DEFAULT_LAT, DEFAULT_LNG], 15);
+            L.control.zoom({ position: 'topright' }).addTo(map);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19, attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+
+            map.on('click', handleMapClick);
+
+            // Sündmuste kuulajad
+            const speedSlider = document.getElementById('speedSlider');
+            speedSlider.addEventListener('input', updateResults);
+            
+            document.getElementById('addWaypointBtn').addEventListener('click', addWaypoint);
+            document.getElementById('clearBtn').addEventListener('click', clearAll);
+            document.getElementById('locateMeBtn').addEventListener('click', () => requestLocation(true));
+
+            // Kiiruse nupud pluss/miinus
+            document.getElementById('btnDecSpeed').addEventListener('click', () => adjustSpeed(-1));
+            document.getElementById('btnIncSpeed').addEventListener('click', () => adjustSpeed(1));
+
+            // Paneeli avamine/sulgemine mobiilis
+            document.getElementById('dragHandleBtn').addEventListener('click', togglePanel);
+            document.getElementById('toggleExpandBtn').addEventListener('click', togglePanel);
+
+            // Akna suuruse muutuse kuulaja (mobiili transformsiooni korrigeerimiseks)
+            window.addEventListener('resize', handleWindowResize);
+
+            // Seadistame koheselt täpsed vaikimisi koordinaadid algpunktiks
+            const startPoint = points[0];
+            startPoint.latlng = L.latLng(DEFAULT_LAT, DEFAULT_LNG);
+            startPoint.address = DEFAULT_ADDRESS;
+
+            // Käivita asukoha tuvastamine kohe alguses
+            requestLocation(false);
+            renderPointsList();
+            handleWindowResize(); // Esialgne seadistus
+        };
+
+        // --- ABIFUNKTSIOONID ---
+        function generateId() { return Math.random().toString(36).substr(2, 9); }
+        
+        function getPointLabel(index) {
+            if (index === 0) return 'A';
+            if (index === points.length - 1) return 'B';
+            return index.toString();
+        }
+        
+        function getPointColor(type) {
+            if (type === 'start') return '#10b981'; // Roheline
+            if (type === 'end') return '#f43f5e'; // Punane
+            return '#3b82f6'; // Sinine vahepunktidele
+        }
+
+        // Kiiruse astmeline reguleerimine nuppudega
+        function adjustSpeed(amount) {
+            const slider = document.getElementById('speedSlider');
+            let currentVal = parseInt(slider.value);
+            let newVal = currentVal + amount;
+            
+            if (newVal >= parseInt(slider.min) && newVal <= parseInt(slider.max)) {
+                slider.value = newVal;
+                updateResults();
+            }
+        }
+
+        // Mobiilipaneeli avamine ja sulgemine
+        function togglePanel() {
+            if (window.innerWidth >= 768) return; // Desktopil ei tee midagi
+            isPanelExpanded = !isPanelExpanded;
+            applyPanelState();
+        }
+
+        function applyPanelState() {
+            const panel = document.getElementById('controlPanel');
+            const chevron = document.getElementById('expandChevron');
+            const collapsibleContent = document.getElementById('panelCollapsibleContent');
+
+            if (window.innerWidth >= 768) {
+                panel.style.transform = '';
+                collapsibleContent.style.display = '';
+                return;
+            }
+
+            if (isPanelExpanded) {
+                panel.style.transform = 'translateY(0)';
+                if (chevron) chevron.style.transform = 'rotate(0deg)';
+                setTimeout(() => { collapsibleContent.style.visibility = 'visible'; }, 100);
+            } else {
+                panel.style.transform = 'translateY(calc(100% - 76px))';
+                if (chevron) chevron.style.transform = 'rotate(180deg)';
+                collapsibleContent.style.visibility = 'hidden';
+            }
+        }
+
+        function handleWindowResize() {
+            if (window.innerWidth >= 768) {
+                const panel = document.getElementById('controlPanel');
+                panel.style.transform = '';
+                document.getElementById('panelCollapsibleContent').style.visibility = 'visible';
+            } else {
+                applyPanelState();
+            }
+        }
+
+        // --- KASUTAJALIIDESE RENDERDAMINE ---
+        function renderPointsList() {
+            const container = document.getElementById('pointsList');
+            container.innerHTML = '';
+
+            points.forEach((point, index) => {
+                const label = getPointLabel(index);
+                const color = getPointColor(point.type);
+                const isWaypoint = point.type === 'waypoint';
+
+                const div = document.createElement('div');
+                div.className = 'relative flex items-center gap-2.5';
+                
+                div.innerHTML = `
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs shrink-0" style="background-color: ${color}">
+                        ${label}
+                    </div>
+                    <div class="relative flex-1">
+                        <input type="text" 
+                               value="${point.address}"
+                               placeholder="${point.type === 'start' ? 'Alguspunkt' : point.type === 'end' ? 'Sihtkoht' : 'Vahepunkt'}"
+                               class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 pr-8 min-h-[44px]"
+                               oninput="handleSearchInput(event, '${point.id}')">
+                        
+                        ${point.address || point.latlng ? `
+                            <button onclick="clearPoint('${point.id}')" class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 min-w-[32px] min-h-[32px] flex items-center justify-center">
+                                <i data-lucide="x" class="w-4 h-4"></i>
+                            </button>
+                        ` : ''}
+                        
+                        <!-- Otsingutulemuste rippmenüü -->
+                        <div id="dropdown-${point.id}" class="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg hidden max-h-48 overflow-y-auto"></div>
+                    </div>
+                    ${isWaypoint ? `
+                        <button onclick="removeWaypoint('${point.id}')" class="text-slate-400 hover:text-rose-500 shrink-0 p-1 min-w-[32px] min-h-[32px] flex items-center justify-center">
+                            <i data-lucide="trash-2" class="w-5 h-5"></i>
+                        </button>
+                    ` : '<div class="w-8 shrink-0"></div>'}
+                `;
+                container.appendChild(div);
+            });
+            lucide.createIcons();
+            updateMapMarkers();
+        }
+
+        // --- OTSING JA GEOKODEERIMINE ---
+        function handleSearchInput(e, pointId) {
+            const query = e.target.value;
+            const point = points.find(p => p.id === pointId);
+            point.address = query;
+            
+            clearTimeout(searchTimeout);
+            const dropdown = document.getElementById(`dropdown-${pointId}`);
+            
+            if (query.length < 3) {
+                dropdown.classList.add('hidden');
+                return;
+            }
+
+            searchTimeout = setTimeout(async () => {
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=ee&addressdetails=1`);
+                    const results = await res.json();
+                    
+                    dropdown.innerHTML = '';
+                    if (results.length === 0) {
+                        dropdown.innerHTML = '<div class="px-3 py-2 text-xs text-slate-500">Tulemusi ei leitud</div>';
+                    } else {
+                        results.slice(0, 5).forEach(item => {
+                            const displayName = formatAddress(item);
+                            const btn = document.createElement('button');
+                            btn.className = 'w-full text-left px-3 py-2.5 text-sm hover:bg-slate-50 border-b border-slate-50 last:border-0 truncate min-h-[44px]';
+                            btn.textContent = displayName;
+                            btn.onclick = () => selectSearchResult(pointId, item);
+                            dropdown.appendChild(btn);
+                        });
+                    }
+                    dropdown.classList.remove('hidden');
+                } catch (error) {
+                    console.error('Otsingu viga:', error);
+                }
+            }, 500);
+        }
+
+        function formatAddress(item) {
+            if (!item.address) return item.display_name;
+            
+            const addr = item.address;
+            const road = addr.road || addr.pedestrian || addr.cycleway;
+            const houseNumber = addr.house_number;
+            const city = addr.city || addr.town || addr.village;
+
+            if (road && houseNumber) {
+                return `${road} ${houseNumber}${city ? `, ${city}` : ''}`;
+            } else if (road) {
+                return `${road}${city ? `, ${city}` : ''}`;
+            }
+            
+            return item.display_name.split(',')[0];
+        }
+
+        function selectSearchResult(pointId, item) {
+            const point = points.find(p => p.id === pointId);
+            point.address = formatAddress(item);
+            point.latlng = L.latLng(item.lat, item.lon);
+            
+            document.getElementById(`dropdown-${pointId}`).classList.add('hidden');
+            renderPointsList();
+            map.setView(point.latlng, 15);
+            fetchRoute();
+        }
+
+        async function reverseGeocode(latlng, pointId) {
+            const point = points.find(p => p.id === pointId);
+            point.latlng = latlng;
+            point.address = `${latlng.lat.toFixed(4)}, ${latlng.lng.toFixed(4)}`;
+            renderPointsList();
+
+            try {
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latlng.lat}&lon=${latlng.lng}&addressdetails=1`);
+                const data = await res.json();
+                if (data) {
+                    point.address = formatAddress(data);
+                    renderPointsList();
+                }
+            } catch (error) {
+                console.error('Aadressi tuvastamine ebaõnnestus', error);
+            }
+        }
+
+        // --- ASUKOHA TUVASTAMINE ---
+        function fallbackToDefaultLocation() {
+            const defaultLatLng = L.latLng(DEFAULT_LAT, DEFAULT_LNG);
+            const startPoint = points[0];
+            
+            startPoint.latlng = defaultLatLng;
+            startPoint.address = DEFAULT_ADDRESS;
+            renderPointsList();
+            map.setView(defaultLatLng, 15);
+        }
+
+        function requestLocation(isManualClick) {
+            if (!navigator.geolocation) {
+                if (isManualClick) showError('Sinu seade ei toeta asukoha tuvastamist.');
+                fallbackToDefaultLocation();
+                return;
+            }
+
+            if (isManualClick) toggleLoader(true);
+
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    const latlng = L.latLng(pos.coords.latitude, pos.coords.longitude);
+                    const startPoint = points[0];
+                    startPoint.latlng = latlng;
+                    startPoint.address = 'Minu asukoht';
+                    
+                    renderPointsList();
+                    map.setView(latlng, 15);
+                    fetchRoute();
+                    if (isManualClick) toggleLoader(false);
+                },
+                (err) => {
+                    if (isManualClick) {
+                        showError('Asukoha lugemine on keelatud või ebaõnnestus.');
+                    }
+                    fallbackToDefaultLocation();
+                    toggleLoader(false);
+                },
+                { enableHighAccuracy: true, timeout: 5000 }
+            );
+        }
+
+        // --- KAARDI SÜNDMUSED JA MARKERID ---
+        function handleMapClick(e) {
+            const emptyPoint = points.find(p => !p.latlng);
+            if (emptyPoint) {
+                reverseGeocode(e.latlng, emptyPoint.id);
+                fetchRoute();
+            }
+        }
+
+        function updateMapMarkers() {
+            Object.values(markersOnMap).forEach(marker => map.removeLayer(marker));
+            markersOnMap = {};
+
+            points.forEach((point, index) => {
+                if (!point.latlng) return;
+
+                const label = getPointLabel(index);
+                const color = getPointColor(point.type);
+
+                const icon = L.divIcon({
+                    html: `<div class="custom-marker" style="background-color: ${color}; width: 28px; height: 28px;">${label}</div>`,
+                    className: '', iconSize: [28, 28], iconAnchor: [14, 14]
+                });
+
+                const marker = L.marker(point.latlng, { icon, draggable: true }).addTo(map);
+                
+                marker.on('dragend', (e) => {
+                    reverseGeocode(e.target.getLatLng(), point.id);
+                    fetchRoute();
+                });
+
+                markersOnMap[point.id] = marker;
+            });
+        }
+
+        // --- PUNKTI OPERATSIOONID ---
+        function addWaypoint() {
+            const newPoint = { id: generateId(), type: 'waypoint', address: '', latlng: null };
+            points.splice(points.length - 1, 0, newPoint);
+            renderPointsList();
+        }
+
+        function removeWaypoint(id) {
+            points = points.filter(p => p.id !== id);
+            renderPointsList();
+            fetchRoute();
+        }
+
+        function clearPoint(id) {
+            const point = points.find(p => p.id === id);
+            point.address = '';
+            point.latlng = null;
+            renderPointsList();
+            fetchRoute();
+        }
+
+        function clearAll() {
+            points = [
+                { id: generateId(), type: 'start', address: '', latlng: null },
+                { id: generateId(), type: 'end', address: '', latlng: null }
+            ];
+            if (routeLine) map.removeLayer(routeLine);
+            routeLine = null;
+            document.getElementById('resultsPanel').classList.add('hidden');
+            document.getElementById('miniSummary').classList.add('hidden');
+            fallbackToDefaultLocation();
+        }
+
+        // --- TEEKONNA ARVUTAMINE (OSRM) ---
+        async function fetchRoute() {
+            const validPoints = points.filter(p => p.latlng);
+            
+            if (validPoints.length < 2) {
+                if (routeLine) map.removeLayer(routeLine);
+                document.getElementById('resultsPanel').classList.add('hidden');
+                document.getElementById('miniSummary').classList.add('hidden');
+                return;
+            }
+
+            toggleLoader(true);
+            
+            const coordinates = validPoints.map(p => `${p.latlng.lng},${p.latlng.lat}`).join(';');
+            const url = `https://router.project-osrm.org/route/v1/foot/${coordinates}?overview=full&geometries=geojson`;
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if (data.code !== 'Ok') throw new Error('Teekonda ei leitud.');
+
+                const route = data.routes[0];
+                routeData.distance = route.distance;
+                routeData.duration = route.duration;
+
+                if (routeLine) map.removeLayer(routeLine);
+
+                routeLine = L.geoJSON(route.geometry, {
+                    style: { color: '#10b981', weight: 5, opacity: 0.8 }
+                }).addTo(map);
+
+                map.fitBounds(routeLine.getBounds(), { padding: [40, 40] });
+                
+                updateResults();
+                document.getElementById('resultsPanel').classList.remove('hidden');
+
+            } catch (error) {
+                showError('Teekonna arvutamine ebaõnnestus.');
+            } finally {
+                toggleLoader(false);
+            }
+        }
+
+        // --- TULEMUSTE KUVAMINE ---
+        function updateResults() {
+            const speedEl = document.getElementById('speedSlider');
+            const speedKmh = parseInt(speedEl.value);
+            document.getElementById('speedLabel').textContent = `${speedKmh} km/h`;
+
+            if (routeData.distance === 0) return;
+
+            const distKm = routeData.distance / 1000;
+            const bikeHoursRaw = distKm / speedKmh;
+            
+            const bikeHrs = Math.floor(bikeHoursRaw);
+            const bikeMins = Math.round((bikeHoursRaw - bikeHrs) * 60);
+
+            const distanceText = `${distKm.toFixed(1)} km`;
+            const timeText = formatTime(bikeHrs, bikeMins);
+
+            document.getElementById('resDistance').textContent = distanceText;
+            document.getElementById('resTime').textContent = timeText;
+
+            document.getElementById('miniDistance').textContent = distanceText;
+            document.getElementById('miniTime').textContent = timeText;
+            document.getElementById('miniSummary').classList.remove('hidden');
+        }
+
+        function formatTime(hours, minutes) {
+            if (hours === 0 && minutes === 0) return '< 1 min';
+            if (hours === 0) return `${minutes} min`;
+            return `${hours} t ${minutes} min`;
+        }
+
+        // --- ABILISED KUVANDID ---
+        function toggleLoader(show) {
+            const el = document.getElementById('loader');
+            if (show) { el.classList.remove('hidden'); el.classList.add('flex'); }
+            else { el.classList.add('hidden'); el.classList.remove('flex'); }
+        }
+
+        function showError(msg) {
+            const el = document.getElementById('errorToast');
+            document.getElementById('errorMsg').textContent = msg;
+            el.classList.remove('hidden');
+            el.classList.add('flex');
+            setTimeout(() => {
+                el.classList.add('hidden');
+                el.classList.remove('flex');
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
