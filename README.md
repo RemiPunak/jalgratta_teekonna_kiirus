@@ -21,7 +21,3 @@ Veebipõhine kaardirakendus jalgrattateekondade planeerimiseks, distantsi arvuta
 * **Disainiraamistik:** Tailwind CSS
 * **Ikoonid:** Lucide Icons
 * **Andmeallikad:** OpenStreetMap, OSRM API, Nominatim API
-
-## Faili struktuur
-
-Projekt koosneb ühest iseseisvast failist, mis ei vaja eraldi ehitusetappi (build step) ega serveripoolset tagapõhja (backend):
